@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% from "_paper_card.html" import paper_card %}
+{% block title %}Favourites{% endblock %}
+
+{% block content %}
+<h1>Favourites ({{ papers|length }})</h1>
+
+{% if papers %}
+{% set ns = namespace(current_date='') %}
+{% for paper in papers %}
+    {% if paper.date_added != ns.current_date %}
+        {% set ns.current_date = paper.date_added %}
+        <h2 class="date-group">{{ paper.date_added }}</h2>
+    {% endif %}
+    {{ paper_card(paper, show_dismiss=false) }}
+{% endfor %}
+{% else %}
+<p class="empty">No favourites yet. Star papers from the daily view.</p>
+{% endif %}
+{% endblock %}

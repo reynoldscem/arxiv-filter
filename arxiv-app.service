@@ -1,0 +1,14 @@
+[Unit]
+Description=arXiv Papers Web App
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/charlie/arxiv/app
+Environment=FLASK_DEBUG=0
+ExecStart=/home/charlie/.virtualenvs/arxiv-app/bin/python arxiv_app.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

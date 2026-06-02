@@ -1,0 +1,53 @@
+{% macro paper_card(paper, show_dismiss=true) %}
+{% set init_data = '{"fav":%s,"dismissed":%s,"note":%s,"showAbstract":false,"showNote":false,"noteSaved":false}' % (paper.is_favourite|tojson, paper.is_dismissed|tojson, (paper.favourite_note or '')|tojson) %}
+<div class="paper-card" x-data='{{ init_data }}' :class="{ favourited: fav, dismissed: dismissed }" data-id="{{ paper.arxiv_id }}">
+
+    <div class="paper-header" :class="{ 'header-clickable': dismissed && !fav }" @click="if(dismissed && !fav){fetch('/api/dismiss/{{ paper.arxiv_id }}', {method:'POST'}).then(r=>r.json()).then(d=>{dismissed=d.is_dismissed})}">
+        <div class="paper-header-left">
+            {% if show_dismiss %}
+            <button class="dismiss-btn" @click.stop="fetch('/api/dismiss/{{ paper.arxiv_id }}', {method:'POST'}).then(r=>r.json()).then(d=>{dismissed=d.is_dismissed})" x-show="!fav" title="Fold">
+                <svg class="dismiss-chevron" :class="{ collapsed: dismissed }" viewBox="0 0 16 16"><path d="M3 6l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            {% endif %}
+            <span class="tier-badge badge-{{ paper.relevance_tier }}">{{ 'HIGH' if paper.relevance_tier == 'high' else 'MOD' }}</span>
+            <span class="collapsed-title" x-show="dismissed && !fav">{{ paper.title }}</span>
+        </div>
+        <button class="fav-btn" x-show="!dismissed || fav" @click.stop="fetch('/api/favourite/{{ paper.arxiv_id }}', {method:'POST'}).then(r=>r.json()).then(d=>{fav=d.is_favourite;setTimeout(()=>location.reload(),150)})" :title="fav ? 'Remove favourite' : 'Add favourite'">
+            <span x-text="fav ? '\u2605' : '\u2606'"></span>
+        </button>
+    </div>
+
+    <div class="paper-body" :class="{ 'body-collapsed': dismissed && !fav }">
+        <h3><a href="{{ paper.abs_url }}" rel="noopener">{{ paper.title }}</a></h3>
+        <p class="authors">{{ paper.authors[:3]|join(', ') }}{% if paper.authors|length > 3 %} et al.{% endif %}</p>
+        {% if paper.thumbnail %}
+        <img class="paper-thumb" src="{{ url_for('static', filename=paper.thumbnail) }}" alt="" loading="lazy">
+        {% endif %}
+        <p class="summary">{{ paper.relevance_summary }}</p>
+
+        <div class="paper-links">
+            <a href="{{ paper.abs_url }}" rel="noopener">[abs]</a>
+            <a href="{{ paper.pdf_url }}" rel="noopener">[pdf]</a>
+            {% for label, url in paper|extract_code_urls %}
+            <a href="{{ url }}" rel="noopener">[{{ label }}]</a>
+            {% endfor %}
+            <button class="link-btn" @click="showAbstract = !showAbstract" x-text="showAbstract ? '[hide abstract]' : '[abstract]'"></button>
+            <span class="arxiv-id">{{ paper.arxiv_id }}</span>
+        </div>
+
+        <div class="abstract" x-show="showAbstract" x-transition.opacity x-effect="if(showAbstract && $el._katex !== true){$el._katex=true;if(window.renderMathInElement)renderMathInElement($el)}">
+            <p>{{ paper.abstract }}</p>
+        </div>
+
+        <template x-if="fav">
+            <div class="note-form">
+                <p class="fav-note" x-show="note && !showNote" @click="showNote = true" x-text="'Note: ' + note" style="cursor:pointer"></p>
+                <div x-show="showNote || !note" class="note-input-row">
+                    <input type="text" placeholder="Add a note..." x-model="note">
+                    <button @click="fetch('/api/favourite/{{ paper.arxiv_id }}/note', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:note})}).then(()=>{noteSaved=true;showNote=false;setTimeout(()=>noteSaved=false,1500)})" x-text="noteSaved ? 'Saved!' : 'Save'"></button>
+                </div>
+            </div>
+        </template>
+    </div>
+</div>
+{% endmacro %}

@@ -1,0 +1,14 @@
+.claude/
+__pycache__/
+*.pyc
+app/data/arxiv.db
+app/data/arxiv.db-wal
+app/data/arxiv.db-shm
+app/data/backups/
+app/data/candidates_*.json
+app/data/filtered_*.json
+app/data/stage2_raw_*.json
+cs_cv_*.json
+cs_cv_*.md
+*.log
+app/static/thumbs/

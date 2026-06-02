@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% from "_paper_card.html" import paper_card %}
+{% block title %}Papers – {{ current_date }}{% endblock %}
+
+{% block content %}
+<div class="date-nav">
+    <h1>Papers for {{ current_date }}</h1>
+    <div class="date-controls">
+        <div class="date-arrows">
+            {% if prev_date %}
+            <a href="/date/{{ prev_date }}" class="date-btn" title="{{ prev_date }}">&larr; Prev</a>
+            {% else %}
+            <span class="date-btn disabled">&larr; Prev</span>
+            {% endif %}
+            <a href="/" class="date-btn">Today</a>
+            {% if next_date %}
+            <a href="/date/{{ next_date }}" class="date-btn" title="{{ next_date }}">Next &rarr;</a>
+            {% else %}
+            <span class="date-btn disabled">Next &rarr;</span>
+            {% endif %}
+        </div>
+        {% if dates %}
+        <select id="date-select" onchange="window.location.href='/date/' + this.value">
+            {% for d in dates %}
+            <option value="{{ d.date_added }}" {% if d.date_added == current_date %}selected{% endif %}>
+                {{ d.date_added }} ({{ d.count }})
+            </option>
+            {% endfor %}
+        </select>
+        {% endif %}
+    </div>
+</div>
+
+{% if papers %}
+<p class="count">{{ papers|length }} paper{{ 's' if papers|length != 1 else '' }}</p>
+
+{% set favs = papers|selectattr('is_favourite')|list %}
+{% set high = papers|rejectattr('is_favourite')|selectattr('relevance_tier', 'equalto', 'high')|list %}
+{% set moderate = papers|rejectattr('is_favourite')|selectattr('relevance_tier', 'equalto', 'moderate')|list %}
+
+{% if favs %}
+<h2 class="tier-heading tier-fav">Favourites ({{ favs|length }})</h2>
+{% for paper in favs %}
+{{ paper_card(paper) }}
+{% endfor %}
+{% endif %}
+
+{% if high %}
+<h2 class="tier-heading tier-high">High Relevance ({{ high|length }})</h2>
+{% for paper in high %}
+{{ paper_card(paper) }}
+{% endfor %}
+{% endif %}
+
+{% if moderate %}
+<h2 class="tier-heading tier-moderate">Moderate Relevance ({{ moderate|length }})</h2>
+{% for paper in moderate %}
+{{ paper_card(paper) }}
+{% endfor %}
+{% endif %}
+
+{% else %}
+<p class="empty">No papers for this date.</p>
+{% endif %}
+{% endblock %}
