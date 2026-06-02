@@ -182,8 +182,11 @@ def _stage1_batch(batch, batch_idx, month_prefix, criteria):
     prompt = (
         f"Here are the filter criteria:\n\n{criteria}\n\n"
         f"--- PAPERS ---\n{title_lines}\n\n"
-        f"Return candidate arxiv_id strings for papers worth reading abstracts. "
-        f"Exclude revisions (ID prefix must be {month_prefix}). Be selective."
+        f"Return candidate arxiv_id strings for papers worth reading the abstract of. "
+        f"Exclude revisions (ID prefix must be {month_prefix}). "
+        f"Be generous — include anything that could plausibly be relevant. "
+        f"Only exclude papers clearly outside the criteria. "
+        f"A second stage will read abstracts and make the final call."
     )
     result = claude_filter(prompt, label=label, json_schema=STAGE1_SCHEMA)
     return result["candidate_ids"]
