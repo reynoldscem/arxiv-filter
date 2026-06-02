@@ -21,8 +21,9 @@ from datetime import date, datetime
 
 import backoff
 
-DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(DIR, "app", "data")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(SCRIPT_DIR)
+DATA_DIR = os.path.join(ROOT_DIR, "app", "data")
 APP_PORT = 5713
 CLAUDE = "/home/charlie/.local/bin/claude"
 ARXIV_RSS_URL = "https://rss.arxiv.org/rss/cs.CV"
@@ -38,7 +39,7 @@ def log_separator(title):
 
 def fetch_papers(target_date, force=False):
     """Fetch papers. Skip fetch if file exists unless force=True."""
-    papers_file = os.path.join(DIR, f"cs_cv_{target_date}.json")
+    papers_file = os.path.join(ROOT_DIR, f"cs_cv_{target_date}.json")
     if not force and os.path.exists(papers_file) and os.path.getsize(papers_file) > 10:
         size = os.path.getsize(papers_file)
         log(f"Using existing {papers_file} ({size:,} bytes)")
@@ -48,7 +49,7 @@ def fetch_papers(target_date, force=False):
         log("Fetching papers from arXiv...")
         result = subprocess.run(
             ["python3", "fetch_arxiv_cv.py", "-o", "json", "-s", f"cs_cv_{target_date}.json"],
-            cwd=DIR, capture_output=True, text=True,
+            cwd=SCRIPT_DIR, capture_output=True, text=True,
         )
         log(f"fetch stdout: {result.stdout.strip()}")
         if result.stderr.strip():
@@ -91,7 +92,7 @@ def claude_filter(prompt, label="claude", json_schema=None, timeout=600):
 
     result = subprocess.run(
         cmd,
-        capture_output=True, text=True, cwd=DIR,
+        capture_output=True, text=True, cwd=ROOT_DIR,
         timeout=timeout,
     )
 
@@ -365,7 +366,7 @@ def main():
         log("App not running — will still fetch and filter, but ingestion will fail")
 
     # Load filter criteria
-    criteria_path = os.path.join(DIR, "filter_criteria.md")
+    criteria_path = os.path.join(ROOT_DIR, "filter_criteria.md")
     with open(criteria_path) as f:
         criteria = f.read()
     log(f"Filter criteria loaded ({len(criteria):,} chars)")
@@ -389,7 +390,7 @@ def main():
             for attempt in range(1, FETCH_MAX_RETRIES + 1):
                 log(f"0 papers on a weekday — retry {attempt}/{FETCH_MAX_RETRIES} in {FETCH_RETRY_DELAY // 60} min...")
                 # Delete the empty file so fetch_papers re-fetches
-                empty_file = os.path.join(DIR, f"cs_cv_{target_date}.json")
+                empty_file = os.path.join(ROOT_DIR, f"cs_cv_{target_date}.json")
                 if os.path.exists(empty_file):
                     os.remove(empty_file)
                 time.sleep(FETCH_RETRY_DELAY)
@@ -430,7 +431,7 @@ def main():
     # 5. Fetch thumbnails for papers with project pages
     log_separator("Stage 4: Thumbnails")
     try:
-        sys.path.insert(0, os.path.join(DIR, "app"))
+        sys.path.insert(0, os.path.join(ROOT_DIR, "app"))
         from fetch_thumbnails import fetch_all_missing
         count = fetch_all_missing()
         log(f"Thumbnails fetched: {count}")

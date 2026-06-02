@@ -16,24 +16,25 @@ A personal daily arXiv paper filter. I used to manually read arXiv titles, then 
 
 ```
 arxiv-filter/
-  cron_update.py        # Main pipeline: fetch -> filter -> ingest (run daily via cron)
-  cron_update.sh        # Cron wrapper (sets PATH, activates venv)
-  fetch_arxiv_cv.py     # arXiv RSS + API fetcher (standalone CLI too)
-  filter_criteria.md    # Your filtering criteria - edit this (see below)
-  backup_db.sh          # Daily DB backup script
-  arxiv-app.service     # systemd user service unit
-  requirements.txt      # Python dependencies
+  filter_criteria.md      # Your filtering criteria - edit this (see below)
+  requirements.txt        # Python dependencies
+  scripts/
+    cron_update.py        # Main pipeline: fetch -> filter -> ingest (run daily via cron)
+    cron_update.sh        # Cron wrapper (sets PATH, activates venv)
+    fetch_arxiv_cv.py     # arXiv RSS + API fetcher (standalone CLI too)
+    backup_db.sh          # Daily DB backup script
+    arxiv-app.service     # systemd user service unit
   app/
-    arxiv_app.py        # Flask web app
-    models.py           # SQLite schema + queries
-    fetch_thumbnails.py # Thumbnail scraper (project pages, arXiv HTML fallback)
-    templates/           # Jinja2 templates (Alpine.js for interactivity)
+    arxiv_app.py          # Flask web app
+    models.py             # SQLite schema + queries
+    fetch_thumbnails.py   # Thumbnail scraper (project pages, arXiv HTML fallback)
+    templates/            # Jinja2 templates (Alpine.js for interactivity)
     static/
       style.css
       alpine.min.js
-      thumbs/           # Downloaded paper thumbnails (gitignored)
+      thumbs/             # Downloaded paper thumbnails (gitignored)
     data/
-      arxiv.db          # SQLite database (gitignored, created on first run)
+      arxiv.db            # SQLite database (gitignored, created on first run)
 ```
 
 ## Setup
@@ -61,21 +62,21 @@ pip install -r requirements.txt
 
 | File | What to change |
 |---|---|
-| `cron_update.py` | `CLAUDE` - path to your Claude CLI binary |
-| `cron_update.sh` | `PATH` and venv python path |
-| `backup_db.sh` | `DB` and `BACKUP_DIR` paths |
-| `arxiv-app.service` | `WorkingDirectory` and `ExecStart` paths |
+| `scripts/cron_update.py` | `CLAUDE` - path to your Claude CLI binary |
+| `scripts/cron_update.sh` | `PATH` and venv python path |
+| `scripts/backup_db.sh` | `DB` and `BACKUP_DIR` paths |
+| `scripts/arxiv-app.service` | `WorkingDirectory` and `ExecStart` paths |
 
-**3. (Optional) Change the arXiv category** - defaults to `cs.CV`. Edit the RSS/API calls in `fetch_arxiv_cv.py` and `cron_update.py` if you want a different category.
+**3. (Optional) Change the arXiv category** - defaults to `cs.CV`. Edit the RSS/API calls in `scripts/fetch_arxiv_cv.py` and `scripts/cron_update.py` if you want a different category.
 
 ### Run manually
 
 ```bash
 # Fetch + filter + ingest today's papers
-python3 cron_update.py
+python3 scripts/cron_update.py
 
 # Fetch a specific date
-python3 cron_update.py 2026-01-15
+python3 scripts/cron_update.py 2026-01-15
 
 # Start the web app (default: port 5713)
 cd app && python3 arxiv_app.py
@@ -85,7 +86,7 @@ cd app && python3 arxiv_app.py
 
 ```bash
 # Copy and edit the service file
-cp arxiv-app.service ~/.config/systemd/user/
+cp scripts/arxiv-app.service ~/.config/systemd/user/
 # Edit paths in the service file to match your setup
 systemctl --user daemon-reload
 systemctl --user enable --now arxiv-app
@@ -100,11 +101,11 @@ Add to your crontab (`crontab -e`):
 
 ```cron
 # Main daily run (after arXiv RSS updates, ~04:00 local)
-0 4 * * * /path/to/cron_update.sh >> /path/to/cron.log 2>&1
+0 4 * * * /path/to/scripts/cron_update.sh >> /path/to/cron.log 2>&1
 
 # Weekday catch-up runs (RSS can be stale at 04:00)
-0 7 * * 1-5 /path/to/cron_update.sh >> /path/to/cron.log 2>&1
-0 12 * * 1-5 /path/to/cron_update.sh >> /path/to/cron.log 2>&1
+0 7 * * 1-5 /path/to/scripts/cron_update.sh >> /path/to/cron.log 2>&1
+0 12 * * 1-5 /path/to/scripts/cron_update.sh >> /path/to/cron.log 2>&1
 ```
 
 The pipeline is idempotent - re-running for the same date won't duplicate papers.
