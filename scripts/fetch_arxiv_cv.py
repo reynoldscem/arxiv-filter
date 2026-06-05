@@ -20,7 +20,9 @@ import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from html import unescape
 from typing import List, Dict, Optional
 
 
@@ -29,6 +31,8 @@ ARXIV_RSS_URL = "https://rss.arxiv.org/rss"
 ARXIV_CATCHUP_URL = "https://arxiv.org/catchup"
 BATCH_SIZE = 50  # Papers per API request
 REQUEST_DELAY = 5  # Seconds between API requests (be nice to arXiv)
+SCRAPE_WORKERS = 8  # Parallel workers for abs page fallback
+SCRAPE_DELAY = 0.5  # Delay between scrape requests per worker
 
 
 def fetch_rss_ids(category: str) -> List[str]:
@@ -131,9 +135,86 @@ def fetch_historical_ids(category: str, date: datetime) -> List[str]:
     return unique_ids
 
 
+def scrape_abs_page(arxiv_id: str) -> Optional[Dict]:
+    """Scrape paper details from arxiv.org/abs/ page (fallback when API is down)."""
+    url = f"https://arxiv.org/abs/{arxiv_id}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as response:
+            html = response.read().decode("utf-8")
+    except Exception as e:
+        print(f"  scrape {arxiv_id}: failed - {e}", file=sys.stderr)
+        return None
+
+    def meta(name):
+        m = re.search(rf'<meta\s+name="{name}"\s+content="(.*?)"', html, re.DOTALL)
+        return unescape(m.group(1)).strip() if m else None
+
+    title = meta("citation_title")
+    abstract = meta("citation_abstract")
+    if not title or not abstract:
+        print(f"  scrape {arxiv_id}: missing title/abstract", file=sys.stderr)
+        return None
+
+    authors = re.findall(r'<meta\s+name="citation_author"\s+content="(.*?)"', html)
+    authors = [unescape(a).strip() for a in authors]
+    # Convert "Last, First" to "First Last"
+    authors = [" ".join(reversed(a.split(", ", 1))) if ", " in a else a for a in authors]
+
+    published = meta("citation_date")
+    pdf_url = meta("citation_pdf_url")
+
+    # Extract comment from HTML table
+    comment = None
+    cm = re.search(r'class="tablecell comments[^"]*">(.*?)</td>', html, re.DOTALL)
+    if cm:
+        comment = re.sub(r'<[^>]+>', '', cm.group(1)).strip()
+        comment = " ".join(comment.split())
+
+    # Extract categories from subjects
+    categories = []
+    sm = re.search(r'class="primary-subject">(.*?)</span>(.*?)</td>', html, re.DOTALL)
+    if sm:
+        primary = re.search(r'\(([^)]+)\)', sm.group(1))
+        if primary:
+            categories.append(primary.group(1))
+        for sec in re.finditer(r'\(([^)]+)\)', sm.group(2)):
+            categories.append(sec.group(1))
+
+    return {
+        "arxiv_id": arxiv_id,
+        "title": " ".join(title.split()),
+        "authors": authors,
+        "abstract": " ".join(abstract.split()),
+        "comment": comment,
+        "categories": categories,
+        "published": published,
+        "updated": None,
+        "pdf_url": pdf_url or f"https://arxiv.org/pdf/{arxiv_id}",
+        "abs_url": f"https://arxiv.org/abs/{arxiv_id}",
+    }
+
+
+def scrape_papers_by_ids(arxiv_ids: List[str]) -> List[Dict]:
+    """Fetch paper details by scraping abs pages in parallel."""
+    print(f"Falling back to abs page scraping for {len(arxiv_ids)} papers...", file=sys.stderr)
+    papers = []
+    with ThreadPoolExecutor(max_workers=SCRAPE_WORKERS) as pool:
+        futures = {pool.submit(scrape_abs_page, aid): aid for aid in arxiv_ids}
+        for i, future in enumerate(as_completed(futures)):
+            paper = future.result()
+            if paper:
+                papers.append(paper)
+            if (i + 1) % 20 == 0:
+                print(f"  scraped {i + 1}/{len(arxiv_ids)}...", file=sys.stderr)
+    print(f"Scraped {len(papers)}/{len(arxiv_ids)} papers from abs pages", file=sys.stderr)
+    return papers
+
+
 def fetch_papers_by_ids(arxiv_ids: List[str]) -> List[Dict]:
     """
     Fetch full paper details from arXiv API by ID.
+    Falls back to scraping abs pages for any IDs the API fails to return.
     """
     if not arxiv_ids:
         return []
@@ -198,6 +279,14 @@ def fetch_papers_by_ids(arxiv_ids: List[str]) -> List[Dict]:
         # Be nice to arXiv
         if i + BATCH_SIZE < len(arxiv_ids):
             time.sleep(REQUEST_DELAY)
+
+    # Fallback: scrape abs pages for any IDs the API missed
+    fetched_ids = {p["arxiv_id"] for p in papers}
+    missing_ids = [aid for aid in arxiv_ids if aid not in fetched_ids]
+    if missing_ids:
+        print(f"API returned {len(papers)}/{len(arxiv_ids)} papers, {len(missing_ids)} missing", file=sys.stderr)
+        scraped = scrape_papers_by_ids(missing_ids)
+        papers.extend(scraped)
 
     return papers
 
