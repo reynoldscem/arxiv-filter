@@ -48,7 +48,7 @@ def fetch_papers(target_date, force=False):
             log(f"Re-fetching (force=True, overwriting existing file)")
         log("Fetching papers from arXiv...")
         result = subprocess.run(
-            ["python3", "fetch_arxiv_cv.py", "-o", "json", "-s", f"cs_cv_{target_date}.json"],
+            ["python3", "fetch_arxiv_cv.py", "-o", "json", "-s", papers_file],
             cwd=SCRIPT_DIR, capture_output=True, text=True,
         )
         log(f"fetch stdout: {result.stdout.strip()}")
