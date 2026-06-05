@@ -214,10 +214,24 @@ def scrape_papers_by_ids(arxiv_ids: List[str]) -> List[Dict]:
 def fetch_papers_by_ids(arxiv_ids: List[str]) -> List[Dict]:
     """
     Fetch full paper details from arXiv API by ID.
-    Falls back to scraping abs pages for any IDs the API fails to return.
+    Falls back to scraping abs pages if the API is down.
     """
     if not arxiv_ids:
         return []
+
+    # Probe the API with a single small request before committing to batches
+    api_ok = False
+    probe_url = f"{ARXIV_API_URL}?{urllib.parse.urlencode({'id_list': arxiv_ids[0], 'max_results': 1})}"
+    try:
+        with urllib.request.urlopen(probe_url, timeout=15) as response:
+            response.read()
+        api_ok = True
+        print("arXiv API responding, using API", file=sys.stderr)
+    except Exception as e:
+        print(f"arXiv API probe failed ({e}), falling back to abs page scraping", file=sys.stderr)
+
+    if not api_ok:
+        return scrape_papers_by_ids(arxiv_ids)
 
     papers = []
 
@@ -280,11 +294,11 @@ def fetch_papers_by_ids(arxiv_ids: List[str]) -> List[Dict]:
         if i + BATCH_SIZE < len(arxiv_ids):
             time.sleep(REQUEST_DELAY)
 
-    # Fallback: scrape abs pages for any IDs the API missed
+    # Scrape any IDs the API missed (partial failure)
     fetched_ids = {p["arxiv_id"] for p in papers}
     missing_ids = [aid for aid in arxiv_ids if aid not in fetched_ids]
     if missing_ids:
-        print(f"API returned {len(papers)}/{len(arxiv_ids)} papers, {len(missing_ids)} missing", file=sys.stderr)
+        print(f"API returned {len(papers)}/{len(arxiv_ids)} papers, scraping {len(missing_ids)} missing", file=sys.stderr)
         scraped = scrape_papers_by_ids(missing_ids)
         papers.extend(scraped)
 
