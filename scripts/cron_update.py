@@ -26,6 +26,7 @@ ROOT_DIR = os.path.dirname(SCRIPT_DIR)
 DATA_DIR = os.path.join(ROOT_DIR, "app", "data")
 APP_PORT = 5713
 CLAUDE = "/home/charlie/.local/bin/claude"
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 ARXIV_RSS_URL = "https://rss.arxiv.org/rss/cs.CV"
 
 
@@ -87,6 +88,8 @@ def claude_filter(prompt, label="claude", json_schema=None, timeout=600):
     log(f"{label}: sending {len(prompt):,} chars to claude (timeout={timeout}s)...")
 
     cmd = [CLAUDE, "--print", "-p", prompt, "--output-format", "json"]
+    if CLAUDE_MODEL:
+        cmd += ["--model", CLAUDE_MODEL]
     if json_schema:
         cmd += ["--json-schema", json.dumps(json_schema)]
 
@@ -248,7 +251,7 @@ def _stage2_batch(batch, batch_idx, criteria):
     return result["papers"]
 
 
-def stage2_filter(papers, candidate_ids, criteria):
+def stage2_filter(papers, candidate_ids, criteria, save_tag=None):
     """Stage 2: read candidate abstracts, produce final filtered list (batched)."""
     selected = [p for p in papers if p["arxiv_id"] in candidate_ids]
     missing = set(candidate_ids) - {p["arxiv_id"] for p in selected}
@@ -280,7 +283,8 @@ def stage2_filter(papers, candidate_ids, criteria):
                     log(traceback.format_exc())
 
     # Save for debugging
-    raw_file = os.path.join(DATA_DIR, f"stage2_raw_{target_date}.json")
+    tag = save_tag or target_date
+    raw_file = os.path.join(DATA_DIR, f"stage2_raw_{tag}.json")
     with open(raw_file, "w") as f:
         json.dump({"papers": all_papers}, f, indent=2)
     log(f"stage2: raw output saved to {raw_file}")
@@ -344,12 +348,20 @@ def get_arxiv_announcement_date():
 
 
 def main():
-    global target_date
+    global target_date, CLAUDE_MODEL
 
-    explicit_date = len(sys.argv) > 1
+    # Parse --model flag if present
+    args = sys.argv[1:]
+    if "--model" in args:
+        idx = args.index("--model")
+        CLAUDE_MODEL = args[idx + 1]
+        args = args[:idx] + args[idx + 2:]
+        log(f"Using Claude model: {CLAUDE_MODEL}")
+
+    explicit_date = len(args) > 0
     if explicit_date:
         # Backfill mode: fetch and ingest under the given date
-        target_date = sys.argv[1]
+        target_date = args[0]
         ingest_date = target_date
     else:
         # Cron mode: fetch by arXiv's announcement date, but ingest under today's
