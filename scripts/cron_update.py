@@ -26,7 +26,7 @@ ROOT_DIR = os.path.dirname(SCRIPT_DIR)
 DATA_DIR = os.path.join(ROOT_DIR, "app", "data")
 APP_PORT = 5713
 CLAUDE = "/home/charlie/.local/bin/claude"
-CLAUDE_MODEL = "claude-haiku-4-5-20251001"
+CLAUDE_MODEL = "claude-sonnet-4-6"
 ARXIV_RSS_URL = "https://rss.arxiv.org/rss/cs.CV"
 
 
