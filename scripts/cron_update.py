@@ -258,6 +258,10 @@ def stage2_filter(papers, candidate_ids, criteria, save_tag=None):
     if missing:
         log(f"stage2: WARNING — {len(missing)} candidate IDs not found in papers: {missing}")
 
+    if not selected:
+        log("stage2: no candidates to filter")
+        return []
+
     n_batches = max(1, math.ceil(len(selected) / STAGE2_BATCH_SIZE))
     batch_size = math.ceil(len(selected) / n_batches)
     batches = [selected[i:i + batch_size] for i in range(0, len(selected), batch_size)]
