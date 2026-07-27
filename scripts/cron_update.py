@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Daily arXiv paper fetch + Claude filtering + app ingestion.
+"""Daily arXiv paper fetch + Claude filtering + ingestion.
 
 Usage:
-    python3 cron_update.py [YYYY-MM-DD]
+    python3 cron_update.py [YYYY-MM-DD] [--model MODEL]
     If no date given, uses the arXiv RSS announcement date.
 """
 
@@ -23,11 +23,13 @@ import backoff
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
-DATA_DIR = os.path.join(ROOT_DIR, "app", "data")
-APP_PORT = 5713
+CACHE_DIR = os.path.join(ROOT_DIR, "data", "cache")
+DEBUG_DIR = os.path.join(ROOT_DIR, "data", "debug")
 CLAUDE = "/home/charlie/.local/bin/claude"
 CLAUDE_MODEL = "claude-sonnet-4-6"
 ARXIV_RSS_URL = "https://rss.arxiv.org/rss/cs.CV"
+
+sys.path.insert(0, os.path.join(ROOT_DIR, "app"))
 
 
 def log(msg):
@@ -40,7 +42,7 @@ def log_separator(title):
 
 def fetch_papers(target_date, force=False):
     """Fetch papers. Skip fetch if file exists unless force=True."""
-    papers_file = os.path.join(ROOT_DIR, f"cs_cv_{target_date}.json")
+    papers_file = os.path.join(CACHE_DIR, f"cs_cv_{target_date}.json")
     if not force and os.path.exists(papers_file) and os.path.getsize(papers_file) > 10:
         size = os.path.getsize(papers_file)
         log(f"Using existing {papers_file} ({size:,} bytes)")
@@ -196,14 +198,20 @@ def _stage1_batch(batch, batch_idx, month_prefix, criteria):
     return result["candidate_ids"]
 
 
+def split_batches(items, max_size):
+    """Split items into evenly sized batches of at most max_size (order not preserved)."""
+    if not items:
+        return []
+    n_batches = math.ceil(len(items) / max_size)
+    return [items[i::n_batches] for i in range(n_batches)]
+
+
 def stage1_candidates(papers, target_date, criteria):
     """Stage 1: scan titles, return candidate IDs (batched + parallel)."""
     month_prefix = target_date.replace("-", "")[2:6]  # e.g. "2603"
 
-    n_batches = max(1, math.ceil(len(papers) / STAGE1_BATCH_SIZE))
-    batch_size = math.ceil(len(papers) / n_batches)
-    batches = [papers[i:i + batch_size] for i in range(0, len(papers), batch_size)]
-    log(f"stage1: scanning {len(papers)} papers in {len(batches)} batch(es) of ~{batch_size}...")
+    batches = split_batches(papers, STAGE1_BATCH_SIZE)
+    log(f"stage1: scanning {len(papers)} papers in {len(batches)} batch(es)...")
 
     all_candidates = []
     if len(batches) == 1:
@@ -225,7 +233,7 @@ def stage1_candidates(papers, target_date, criteria):
                     log(traceback.format_exc())
 
     # Save for debugging
-    candidates_file = os.path.join(DATA_DIR, f"candidates_{target_date}.json")
+    candidates_file = os.path.join(DEBUG_DIR, f"candidates_{target_date}.json")
     with open(candidates_file, "w") as f:
         json.dump({"candidate_ids": all_candidates}, f, indent=2)
     log(f"stage1: raw output saved to {candidates_file}")
@@ -251,7 +259,7 @@ def _stage2_batch(batch, batch_idx, criteria):
     return result["papers"]
 
 
-def stage2_filter(papers, candidate_ids, criteria, save_tag=None):
+def stage2_filter(papers, candidate_ids, criteria, save_tag):
     """Stage 2: read candidate abstracts, produce final filtered list (batched)."""
     selected = [p for p in papers if p["arxiv_id"] in candidate_ids]
     missing = set(candidate_ids) - {p["arxiv_id"] for p in selected}
@@ -262,10 +270,8 @@ def stage2_filter(papers, candidate_ids, criteria, save_tag=None):
         log("stage2: no candidates to filter")
         return []
 
-    n_batches = max(1, math.ceil(len(selected) / STAGE2_BATCH_SIZE))
-    batch_size = math.ceil(len(selected) / n_batches)
-    batches = [selected[i:i + batch_size] for i in range(0, len(selected), batch_size)]
-    log(f"stage2: filtering {len(selected)} candidates in {len(batches)} batch(es) of ~{batch_size}...")
+    batches = split_batches(selected, STAGE2_BATCH_SIZE)
+    log(f"stage2: filtering {len(selected)} candidates in {len(batches)} batch(es)...")
 
     all_papers = []
     if len(batches) == 1:
@@ -287,8 +293,7 @@ def stage2_filter(papers, candidate_ids, criteria, save_tag=None):
                     log(traceback.format_exc())
 
     # Save for debugging
-    tag = save_tag or target_date
-    raw_file = os.path.join(DATA_DIR, f"stage2_raw_{tag}.json")
+    raw_file = os.path.join(DEBUG_DIR, f"stage2_raw_{save_tag}.json")
     with open(raw_file, "w") as f:
         json.dump({"papers": all_papers}, f, indent=2)
     log(f"stage2: raw output saved to {raw_file}")
@@ -296,33 +301,14 @@ def stage2_filter(papers, candidate_ids, criteria, save_tag=None):
     return all_papers
 
 
-def ingest(target_date, filtered_json):
-    """POST filtered papers to the app."""
-    url = f"http://localhost:{APP_PORT}/api/papers?date={target_date}"
-    log(f"Ingesting to {url} ({len(filtered_json):,} bytes)...")
-    req = urllib.request.Request(
-        url,
-        data=filtered_json.encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.load(resp)
-        log(f"Ingestion response: {result}")
-    except urllib.error.URLError as e:
-        log(f"Ingestion FAILED — is the app running? {e}")
-        raise
+def ingest(ingest_date, filtered):
+    """Write filtered papers straight to the database."""
+    from models import init_db, insert_papers
 
-
-def check_app_running():
-    """Verify the Flask app is reachable before starting."""
-    try:
-        with urllib.request.urlopen(f"http://localhost:{APP_PORT}/", timeout=5):
-            return True
-    except Exception as e:
-        log(f"WARNING: app not reachable at localhost:{APP_PORT}: {e}")
-        return False
+    init_db()
+    new, updated = insert_papers(filtered, ingest_date)
+    log(f"Ingested for {ingest_date}: {new} new, {updated} updated")
+    return new, updated
 
 
 def get_arxiv_announcement_date():
@@ -352,7 +338,7 @@ def get_arxiv_announcement_date():
 
 
 def main():
-    global target_date, CLAUDE_MODEL
+    global CLAUDE_MODEL
 
     # Parse --model flag if present
     args = sys.argv[1:]
@@ -373,13 +359,10 @@ def main():
         target_date = get_arxiv_announcement_date() or date.today().isoformat()
         ingest_date = date.today().isoformat()
 
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    os.makedirs(DEBUG_DIR, exist_ok=True)
 
     log_separator(f"arXiv update for {target_date} (ingesting as {ingest_date})")
-
-    # Pre-flight checks
-    if not check_app_running():
-        log("App not running — will still fetch and filter, but ingestion will fail")
 
     # Load filter criteria
     criteria_path = os.path.join(ROOT_DIR, "filter_criteria.md")
@@ -406,7 +389,7 @@ def main():
             for attempt in range(1, FETCH_MAX_RETRIES + 1):
                 log(f"0 papers on a weekday — retry {attempt}/{FETCH_MAX_RETRIES} in {FETCH_RETRY_DELAY // 60} min...")
                 # Delete the empty file so fetch_papers re-fetches
-                empty_file = os.path.join(ROOT_DIR, f"cs_cv_{target_date}.json")
+                empty_file = os.path.join(CACHE_DIR, f"cs_cv_{target_date}.json")
                 if os.path.exists(empty_file):
                     os.remove(empty_file)
                 time.sleep(FETCH_RETRY_DELAY)
@@ -428,12 +411,11 @@ def main():
 
     # 3. Stage 2: abstract filter
     log_separator("Stage 2: Abstract filter")
-    filtered = stage2_filter(papers, candidate_ids, criteria)
+    filtered = stage2_filter(papers, candidate_ids, criteria, save_tag=target_date)
 
-    filtered_json = json.dumps(filtered, indent=2)
-    filtered_file = os.path.join(DATA_DIR, f"filtered_{target_date}.json")
+    filtered_file = os.path.join(DEBUG_DIR, f"filtered_{target_date}.json")
     with open(filtered_file, "w") as f:
-        f.write(filtered_json)
+        json.dump(filtered, f, indent=2)
 
     log(f"Final papers: {len(filtered)}")
     for p in filtered:
@@ -442,12 +424,11 @@ def main():
 
     # 4. Ingest
     log_separator("Stage 3: Ingest")
-    ingest(ingest_date, filtered_json)
+    ingest(ingest_date, filtered)
 
     # 5. Fetch thumbnails for papers with project pages
     log_separator("Stage 4: Thumbnails")
     try:
-        sys.path.insert(0, os.path.join(ROOT_DIR, "app"))
         from fetch_thumbnails import fetch_all_missing
         count = fetch_all_missing()
         log(f"Thumbnails fetched: {count}")
@@ -461,8 +442,8 @@ def main():
         from models import get_db
         conn = get_db()
         total = conn.execute("SELECT COUNT(*) FROM papers WHERE date_added = ?", (ingest_date,)).fetchone()[0]
-        thumbs = conn.execute("SELECT COUNT(*) FROM papers WHERE date_added = ? AND thumbnail IS NOT NULL", (target_date,)).fetchone()[0]
-        code = conn.execute("SELECT COUNT(*) FROM papers WHERE date_added = ? AND code_url IS NOT NULL", (target_date,)).fetchone()[0]
+        thumbs = conn.execute("SELECT COUNT(*) FROM papers WHERE date_added = ? AND thumbnail IS NOT NULL", (ingest_date,)).fetchone()[0]
+        code = conn.execute("SELECT COUNT(*) FROM papers WHERE date_added = ? AND code_url IS NOT NULL", (ingest_date,)).fetchone()[0]
         no_thumb = conn.execute(
             "SELECT arxiv_id, title FROM papers WHERE date_added = ? AND thumbnail IS NULL", (ingest_date,)
         ).fetchall()

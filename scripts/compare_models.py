@@ -4,11 +4,11 @@
 import json
 import os
 import sys
-import shutil
+from datetime import date
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
-DATA_DIR = os.path.join(ROOT_DIR, "app", "data")
+DEBUG_DIR = os.path.join(ROOT_DIR, "data", "debug")
 sys.path.insert(0, SCRIPT_DIR)
 
 from cron_update import (
@@ -18,7 +18,7 @@ from cron_update import (
 import cron_update
 
 MODELS = ["claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-6"]
-TARGET_DATE = "2026-06-15"
+TARGET_DATE = sys.argv[1] if len(sys.argv) > 1 else date.today().isoformat()
 
 
 def run_model(model_name, papers, criteria):
@@ -34,7 +34,7 @@ def run_model(model_name, papers, criteria):
     filtered = stage2_filter(papers, candidate_ids, criteria, save_tag=f"{short}_{TARGET_DATE}")
     log(f"{short} stage2: {len(filtered)} papers")
 
-    out_file = os.path.join(DATA_DIR, f"compare_{short}_{TARGET_DATE}.json")
+    out_file = os.path.join(DEBUG_DIR, f"compare_{short}_{TARGET_DATE}.json")
     with open(out_file, "w") as f:
         json.dump(filtered, f, indent=2)
     log(f"Saved to {out_file}")

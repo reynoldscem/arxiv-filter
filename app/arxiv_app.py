@@ -127,8 +127,8 @@ def api_ingest_papers():
         return jsonify({"error": "Expected a JSON array"}), 400
 
     date_added = request.args.get("date", date.today().isoformat())
-    count = insert_papers(data, date_added)
-    return jsonify({"inserted": count, "date": date_added})
+    new, updated = insert_papers(data, date_added)
+    return jsonify({"new": new, "updated": updated, "date": date_added})
 
 
 @app.route("/api/favourite/<arxiv_id>", methods=["POST"])

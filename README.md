@@ -22,6 +22,7 @@ arxiv-filter/
     cron_update.py        # Main pipeline: fetch -> filter -> ingest (run daily via cron)
     cron_update.sh        # Cron wrapper (sets PATH, activates venv)
     fetch_arxiv_cv.py     # arXiv RSS + API fetcher (standalone CLI too)
+    compare_models.py     # Run the filter with several models side by side
     backup_db.sh          # Daily DB backup script
     arxiv-app.service     # systemd user service unit
   app/
@@ -35,6 +36,11 @@ arxiv-filter/
       thumbs/             # Downloaded paper thumbnails (gitignored)
     data/
       arxiv.db            # SQLite database (gitignored, created on first run)
+  tests/                  # pytest suite (run: pytest)
+  data/                   # Runtime state, all gitignored
+    cache/                # Raw daily fetches from arXiv
+    debug/                # Per-stage filter output for debugging
+    logs/                 # Cron and backup logs
 ```
 
 ## Setup

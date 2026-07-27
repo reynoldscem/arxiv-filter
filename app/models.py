@@ -80,18 +80,25 @@ def _row_to_dict(row):
 def insert_papers(papers, date_added):
     """Insert or update a list of papers for a given date.
 
+    Existing papers are updated in place but keep their original
+    date_added, so re-ingesting the same feed on a later day does not
+    move papers between dates.
+
     Args:
         papers: list of dicts with paper data
-        date_added: announcement date string (YYYY-MM-DD)
+        date_added: date string (YYYY-MM-DD) for new papers
 
     Returns:
-        number of papers inserted/updated
+        (new, updated) row counts
     """
     conn = get_db()
-    count = 0
+    new = updated = 0
     for p in papers:
         authors = json.dumps(p.get("authors", []))
         categories = json.dumps(p.get("categories", []))
+        exists = conn.execute(
+            "SELECT 1 FROM papers WHERE arxiv_id = ?", (p["arxiv_id"],)
+        ).fetchone()
         conn.execute("""
             INSERT INTO papers
                 (arxiv_id, title, authors, abstract, comment, categories, published,
@@ -115,10 +122,13 @@ def insert_papers(papers, date_added):
             p.get("relevance_tier"), p.get("relevance_summary"),
             date_added,
         ))
-        count += 1
+        if exists:
+            updated += 1
+        else:
+            new += 1
     conn.commit()
     conn.close()
-    return count
+    return new, updated
 
 
 def get_papers_by_date(date_str):
