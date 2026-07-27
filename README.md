@@ -84,9 +84,21 @@ python3 scripts/cron_update.py
 # Fetch a specific date
 python3 scripts/cron_update.py 2026-01-15
 
+# Use a different Claude model (default: Sonnet, set in cron_update.py)
+python3 scripts/cron_update.py --model claude-haiku-4-5-20251001
+
 # Start the web app (default: port 5713)
 cd app && python3 arxiv_app.py
 ```
+
+### Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+CI runs the suite on every push.
 
 ### Run as a service (systemd)
 
