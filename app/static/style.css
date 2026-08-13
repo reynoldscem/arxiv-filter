@@ -55,6 +55,11 @@ nav {
     font-weight: 600;
 }
 
+.nav-links a.nav-logout {
+    opacity: 0.7;
+    font-size: 0.85rem;
+}
+
 main {
     max-width: 52rem;
     margin: 0 auto;

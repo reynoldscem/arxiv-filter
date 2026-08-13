@@ -18,6 +18,7 @@
         <div class="nav-links">
             <a href="{{ url_for('index') }}" {% if request.endpoint in ('index', 'papers_by_date') %}class="active"{% endif %}>Daily</a>
             <a href="{{ url_for('favourites') }}" {% if request.endpoint == 'favourites' %}class="active"{% endif %}>Favourites</a>
+            <a href="/cdn-cgi/access/logout" class="nav-logout">Log out</a>
         </div>
     </nav>
     <main>
