@@ -25,9 +25,12 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
 CACHE_DIR = os.path.join(ROOT_DIR, "data", "cache")
 DEBUG_DIR = os.path.join(ROOT_DIR, "data", "debug")
+STATE_FILE = os.path.join(ROOT_DIR, "data", "last_run.json")
 CLAUDE = "/home/charlie/.local/bin/claude"
 CLAUDE_MODEL = "claude-sonnet-4-6"
 ARXIV_RSS_URL = "https://rss.arxiv.org/rss/cs.CV"
+FETCH_RETRY_DELAY = 30 * 60  # 30 minutes
+FETCH_MAX_RETRIES = 3
 
 sys.path.insert(0, os.path.join(ROOT_DIR, "app"))
 
@@ -337,6 +340,31 @@ def get_arxiv_announcement_date():
     return None
 
 
+def load_last_run():
+    """Return {"announcement_date", "ingest_date"} of the last cron ingest, or {}."""
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_last_run(announcement_date, ingest_date):
+    with open(STATE_FILE, "w") as f:
+        json.dump({"announcement_date": announcement_date, "ingest_date": ingest_date}, f)
+
+
+def is_stale_feed(announcement_date, ingest_date, last_run):
+    """True if the feed still shows an announcement we already ingested on an
+    earlier day, i.e. arXiv hasn't published the next batch yet. Re-runs on the
+    same day are allowed through so late-arriving papers get picked up."""
+    return (
+        bool(last_run)
+        and last_run.get("announcement_date") == announcement_date
+        and last_run.get("ingest_date", "") < ingest_date
+    )
+
+
 def main():
     global CLAUDE_MODEL
 
@@ -370,6 +398,25 @@ def main():
         criteria = f.read()
     log(f"Filter criteria loaded ({len(criteria):,} chars)")
 
+    # The RSS is often still showing yesterday's announcement at 04:00. If we've
+    # already ingested that announcement on an earlier day, wait for the feed to
+    # update (weekdays) rather than re-filtering the same papers.
+    if not explicit_date:
+        last_run = load_last_run()
+        if is_stale_feed(target_date, ingest_date, last_run):
+            log(f"Feed still shows {target_date}, already ingested on {last_run['ingest_date']}")
+            if datetime.now().weekday() < 5:
+                for attempt in range(1, FETCH_MAX_RETRIES + 1):
+                    log(f"Stale feed — retry {attempt}/{FETCH_MAX_RETRIES} in {FETCH_RETRY_DELAY // 60} min...")
+                    time.sleep(FETCH_RETRY_DELAY)
+                    target_date = get_arxiv_announcement_date() or date.today().isoformat()
+                    if not is_stale_feed(target_date, ingest_date, last_run):
+                        log(f"Feed updated: now {target_date}")
+                        break
+            if is_stale_feed(target_date, ingest_date, last_run):
+                log_separator("Complete (feed not updated)")
+                return
+
     # 1. Fetch — always re-fetch in automatic mode (cron) since the RSS
     # may have updated since the last run with the same date
     log_separator("Stage 0: Fetch")
@@ -380,8 +427,6 @@ def main():
     # If we get 0 on a weekday, the feed is probably stale — retry up to 3 times.
     # Check the *current* day, not the RSS date — on Monday morning the RSS may
     # still show Sunday's (empty) date if the feed hasn't updated yet.
-    FETCH_RETRY_DELAY = 30 * 60  # 30 minutes
-    FETCH_MAX_RETRIES = 3
     if not papers and not explicit_date:
         today_weekday = datetime.now().weekday()  # 0=Mon
         is_weekday = today_weekday < 5  # Sat=5, Sun=6
@@ -425,6 +470,8 @@ def main():
     # 4. Ingest
     log_separator("Stage 3: Ingest")
     ingest(ingest_date, filtered)
+    if not explicit_date:
+        save_last_run(target_date, ingest_date)
 
     # 5. Fetch thumbnails for papers with project pages
     log_separator("Stage 4: Thumbnails")
