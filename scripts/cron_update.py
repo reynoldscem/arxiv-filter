@@ -101,7 +101,7 @@ def claude_filter(prompt, label="claude", json_schema=None, timeout=600):
     result = subprocess.run(
         cmd,
         capture_output=True, text=True, cwd=ROOT_DIR,
-        timeout=timeout,
+        timeout=timeout, stdin=subprocess.DEVNULL,
     )
 
     log(f"{label}: exit code {result.returncode}, stdout {len(result.stdout):,} chars, stderr {len(result.stderr):,} chars")
@@ -124,6 +124,14 @@ def claude_filter(prompt, label="claude", json_schema=None, timeout=600):
         log(f"{label}: failed to parse JSON envelope: {e}")
         log(f"{label}: raw output (first 500): {result.stdout[:500]}")
         raise ClaudeFilterError(f"{label} returned invalid JSON envelope")
+
+    # A rate limit, usage limit or API error comes back as exit 0 with the
+    # message in "result" and no structured_output — don't mistake it for data.
+    if envelope.get("is_error") or (json_schema and "structured_output" not in envelope):
+        log(f"{label}: error from claude (is_error={envelope.get('is_error')}, "
+            f"subtype={envelope.get('subtype')}, api_error_status={envelope.get('api_error_status')}): "
+            f"{str(envelope.get('result'))[:500]}")
+        raise ClaudeFilterError(f"{label} returned an error instead of structured output")
 
     # Extract the actual result
     if json_schema and "structured_output" in envelope:
