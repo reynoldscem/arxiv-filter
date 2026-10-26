@@ -56,3 +56,19 @@ def test_claude_structured_output_returned(monkeypatch):
     envelope = {"type": "result", "is_error": False, "result": "{}", "structured_output": {"candidate_ids": ["2610.00001"]}}
     monkeypatch.setattr(cron_update.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, json.dumps(envelope), ""))
     assert cron_update.claude_filter.__wrapped__("prompt", json_schema=cron_update.STAGE1_SCHEMA) == {"candidate_ids": ["2610.00001"]}
+
+
+def test_stage1_failed_batch_is_recorded(tmp_path, monkeypatch):
+    monkeypatch.setattr(cron_update, "DEBUG_DIR", str(tmp_path))
+    monkeypatch.setattr(cron_update, "failed_batches", [])
+
+    def fake_batch(batch, batch_idx, month_prefix, criteria):
+        if batch_idx == 1:
+            raise cron_update.ClaudeFilterError("usage limit")
+        return [batch[0]["arxiv_id"]]
+
+    monkeypatch.setattr(cron_update, "_stage1_batch", fake_batch)
+    papers = [{"arxiv_id": f"2610.{i:05d}", "title": "T"} for i in range(cron_update.STAGE1_BATCH_SIZE + 1)]
+    candidates = cron_update.stage1_candidates(papers, "2026-10-26", "criteria")
+    assert len(candidates) == 1
+    assert cron_update.failed_batches == ["stage1[1]"]

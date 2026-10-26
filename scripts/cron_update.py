@@ -32,6 +32,10 @@ ARXIV_RSS_URL = "https://rss.arxiv.org/rss/cs.CV"
 FETCH_RETRY_DELAY = 30 * 60  # 30 minutes
 FETCH_MAX_RETRIES = 3
 
+# Labels of Claude batches that failed after retries in this run. A run with any
+# failures ends with a FAILED line and exit 1 so the dashboard goes red.
+failed_batches = []
+
 sys.path.insert(0, os.path.join(ROOT_DIR, "app"))
 
 
@@ -241,6 +245,7 @@ def stage1_candidates(papers, target_date, criteria):
                     all_candidates.extend(batch_ids)
                 except Exception as e:
                     log(f"stage1[{batch_idx}]: FAILED — {e}")
+                    failed_batches.append(f"stage1[{batch_idx}]")
                     log(traceback.format_exc())
 
     # Save for debugging
@@ -301,6 +306,7 @@ def stage2_filter(papers, candidate_ids, criteria, save_tag):
                     all_papers.extend(batch_papers)
                 except Exception as e:
                     log(f"stage2[{batch_idx}]: FAILED — {e}")
+                    failed_batches.append(f"stage2[{batch_idx}]")
                     log(traceback.format_exc())
 
     # Save for debugging
@@ -478,7 +484,9 @@ def main():
     # 4. Ingest
     log_separator("Stage 3: Ingest")
     ingest(ingest_date, filtered)
-    if not explicit_date:
+    # Only mark this announcement done if filtering fully worked, so a later
+    # run (even tomorrow's 04:00 on a stale feed) retries it
+    if not explicit_date and not failed_batches:
         save_last_run(target_date, ingest_date)
 
     # 5. Fetch thumbnails for papers with project pages
@@ -510,6 +518,9 @@ def main():
     except Exception as e:
         log(f"Coverage check failed: {e}")
 
+    if failed_batches:
+        log_separator(f"FAILED ({len(failed_batches)} filter batch(es): {', '.join(sorted(failed_batches))})")
+        sys.exit(1)
     log_separator("Complete")
 
 
