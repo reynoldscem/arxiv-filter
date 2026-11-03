@@ -6,6 +6,7 @@ Usage:
     If no date given, uses the arXiv RSS announcement date.
 """
 
+import fcntl
 import json
 import math
 import os
@@ -17,7 +18,8 @@ import traceback
 import urllib.request
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from datetime import time as dtime
 
 import backoff
 
@@ -29,8 +31,12 @@ STATE_FILE = os.path.join(ROOT_DIR, "data", "last_run.json")
 CLAUDE = "/home/charlie/.local/bin/claude"
 CLAUDE_MODEL = "claude-sonnet-4-6"
 ARXIV_RSS_URL = "https://rss.arxiv.org/rss/cs.CV"
-FETCH_RETRY_DELAY = 30 * 60  # 30 minutes
-FETCH_MAX_RETRIES = 3
+LOCK_FILE = os.path.join(ROOT_DIR, "data", "cron.lock")
+# On weekdays, when the feed is stale or empty, re-check every FETCH_POLL_INTERVAL
+# until FETCH_DEADLINE (local time). arXiv's feed is sometimes not filled until
+# ~09:00 (seen 3 Nov 2026: dated 05:00, items at 08:49).
+FETCH_POLL_INTERVAL = 15 * 60  # 15 minutes
+FETCH_DEADLINE = dtime(11, 0)
 
 # Labels of Claude batches that failed after retries in this run. A run with any
 # failures ends with a FAILED line and exit 1 so the dashboard goes red.
@@ -368,6 +374,36 @@ def save_last_run(announcement_date, ingest_date):
         json.dump({"announcement_date": announcement_date, "ingest_date": ingest_date}, f)
 
 
+def next_poll_time(now, interval=FETCH_POLL_INTERVAL, deadline=FETCH_DEADLINE):
+    """When to re-check the feed, or None if that would be past today's deadline."""
+    nxt = now + timedelta(seconds=interval)
+    if nxt > datetime.combine(now.date(), deadline):
+        return None
+    return nxt
+
+
+def wait_for_next_poll(reason):
+    """Sleep until the next poll. Returns False once the deadline has passed."""
+    nxt = next_poll_time(datetime.now())
+    if nxt is None:
+        log(f"{reason} — giving up (past {FETCH_DEADLINE.strftime('%H:%M')} deadline)")
+        return False
+    log(f"{reason} — re-checking at {nxt.strftime('%H:%M')}")
+    time.sleep(max(0, (nxt - datetime.now()).total_seconds()))
+    return True
+
+
+def acquire_lock():
+    """Take an exclusive lock so overlapping cron runs don't both filter and ingest."""
+    fh = open(LOCK_FILE, "w")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fh.close()
+        return None
+    return fh
+
+
 def is_stale_feed(announcement_date, ingest_date, last_run):
     """True if the feed still shows an announcement we already ingested on an
     earlier day, i.e. arXiv hasn't published the next batch yet. Re-runs on the
@@ -420,9 +456,7 @@ def main():
         if is_stale_feed(target_date, ingest_date, last_run):
             log(f"Feed still shows {target_date}, already ingested on {last_run['ingest_date']}")
             if datetime.now().weekday() < 5:
-                for attempt in range(1, FETCH_MAX_RETRIES + 1):
-                    log(f"Stale feed — retry {attempt}/{FETCH_MAX_RETRIES} in {FETCH_RETRY_DELAY // 60} min...")
-                    time.sleep(FETCH_RETRY_DELAY)
+                while wait_for_next_poll("Stale feed"):
                     target_date = get_arxiv_announcement_date() or date.today().isoformat()
                     if not is_stale_feed(target_date, ingest_date, last_run):
                         log(f"Feed updated: now {target_date}")
@@ -438,24 +472,25 @@ def main():
     log(f"Total papers fetched: {len(papers)}")
 
     # arXiv publishes Sun-Thu, so weekday fetches (Mon-Fri) should have papers.
-    # If we get 0 on a weekday, the feed is probably stale — retry up to 3 times.
+    # If we get 0 on a weekday, the feed is probably not filled yet — keep polling
+    # until FETCH_DEADLINE.
     # Check the *current* day, not the RSS date — on Monday morning the RSS may
     # still show Sunday's (empty) date if the feed hasn't updated yet.
     if not papers and not explicit_date:
         today_weekday = datetime.now().weekday()  # 0=Mon
         is_weekday = today_weekday < 5  # Sat=5, Sun=6
         if is_weekday:
-            for attempt in range(1, FETCH_MAX_RETRIES + 1):
-                log(f"0 papers on a weekday — retry {attempt}/{FETCH_MAX_RETRIES} in {FETCH_RETRY_DELAY // 60} min...")
+            while True:
                 # Delete the empty file so fetch_papers re-fetches
                 empty_file = os.path.join(CACHE_DIR, f"cs_cv_{target_date}.json")
                 if os.path.exists(empty_file):
                     os.remove(empty_file)
-                time.sleep(FETCH_RETRY_DELAY)
+                if not wait_for_next_poll("0 papers on a weekday"):
+                    break
                 # Re-check RSS date in case it updated during the wait
                 target_date = get_arxiv_announcement_date() or date.today().isoformat()
                 papers = fetch_papers(target_date, force=True)
-                log(f"Retry {attempt}: fetched {len(papers)} papers (date: {target_date})")
+                log(f"Re-check: fetched {len(papers)} papers (date: {target_date})")
                 if papers:
                     break
 
@@ -525,6 +560,10 @@ def main():
 
 
 if __name__ == "__main__":
+    lock = acquire_lock()
+    if lock is None:
+        log("Another update is still running (lock held) — skipping this run")
+        sys.exit(0)
     try:
         main()
     except Exception as e:

@@ -72,3 +72,27 @@ def test_stage1_failed_batch_is_recorded(tmp_path, monkeypatch):
     candidates = cron_update.stage1_candidates(papers, "2026-10-26", "criteria")
     assert len(candidates) == 1
     assert cron_update.failed_batches == ["stage1[1]"]
+
+
+@pytest.mark.parametrize("now,expected", [
+    ("2026-11-03 05:00", "2026-11-03 05:15"),
+    ("2026-11-03 10:45", "2026-11-03 11:00"),  # landing exactly on the deadline is allowed
+    ("2026-11-03 10:50", None),
+    ("2026-11-03 12:00", None),  # midday top-up runs don't poll
+])
+def test_next_poll_time(now, expected):
+    from datetime import datetime
+    fmt = "%Y-%m-%d %H:%M"
+    got = cron_update.next_poll_time(datetime.strptime(now, fmt))
+    assert got == (datetime.strptime(expected, fmt) if expected else None)
+
+
+def test_lock_blocks_second_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(cron_update, "LOCK_FILE", str(tmp_path / "cron.lock"))
+    first = cron_update.acquire_lock()
+    assert first is not None
+    assert cron_update.acquire_lock() is None
+    first.close()
+    second = cron_update.acquire_lock()
+    assert second is not None
+    second.close()

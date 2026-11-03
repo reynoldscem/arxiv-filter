@@ -142,7 +142,7 @@ Be specific about what matters to you. "3D reconstruction" is broad; "monocular 
 
 ## Notes
 
-- **arXiv timing**: RSS updates Sun-Thu around 20:00 ET. A 04:00 BST cron may get stale data - the built-in weekday retry (30-min intervals, 3 attempts) handles this, and extra cron runs help.
+- **arXiv timing**: RSS updates Sun-Thu around 20:00 ET. The feed is often stale or empty at 04:00 and sometimes not filled until ~09:00. On weekdays the run re-checks every 15 minutes until 11:00 (`FETCH_POLL_INTERVAL`, `FETCH_DEADLINE`). A lock (`data/cron.lock`) makes later cron runs skip while an earlier one is still polling. The 12:00 and 17:00 runs top up late papers.
 - **Monday batches**: Weekends accumulate 500+ papers. Stage 1 splits these into parallel batches automatically.
 - **Claude rate limits**: The pipeline uses `backoff` for exponential retries. If you hit session limits (429), the extra cron runs will catch up later.
 - **Claude auth**: The CLI auth can expire. If you see 401 errors in the cron log, run `claude /login` manually.
