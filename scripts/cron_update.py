@@ -369,9 +369,22 @@ def load_last_run():
         return {}
 
 
-def save_last_run(announcement_date, ingest_date):
+def save_last_run(announcement_date, ingest_date, paper_ids=()):
     with open(STATE_FILE, "w") as f:
-        json.dump({"announcement_date": announcement_date, "ingest_date": ingest_date}, f)
+        json.dump({"announcement_date": announcement_date, "ingest_date": ingest_date,
+                   "paper_ids": sorted(paper_ids)}, f)
+
+
+def repeats_last_run(papers, ingest_date, last_run):
+    """True if every fetched paper was already in a feed we ingested on an earlier day.
+
+    arXiv sometimes re-dates the feed before refilling it (seen 10 Nov 2026: dated
+    05:00, still the previous day's papers until 08:33), so the date alone can't tell.
+    """
+    previous = set(last_run.get("paper_ids") or [])
+    if not previous or not papers or last_run.get("ingest_date", "") >= ingest_date:
+        return False
+    return {p["arxiv_id"] for p in papers} <= previous
 
 
 def next_poll_time(now, interval=FETCH_POLL_INTERVAL, deadline=FETCH_DEADLINE):
@@ -470,32 +483,42 @@ def main():
     log_separator("Stage 0: Fetch")
     papers = fetch_papers(target_date, force=not explicit_date)
     log(f"Total papers fetched: {len(papers)}")
+    last_run = {} if explicit_date else load_last_run()
+
+    def feed_not_ready(papers):
+        if not papers:
+            return "0 papers on a weekday"
+        if repeats_last_run(papers, ingest_date, last_run):
+            return f"Feed dated {target_date} still holds the papers ingested on {last_run['ingest_date']}"
+        return None
 
     # arXiv publishes Sun-Thu, so weekday fetches (Mon-Fri) should have papers.
     # If we get 0 on a weekday, the feed is probably not filled yet — keep polling
     # until FETCH_DEADLINE.
     # Check the *current* day, not the RSS date — on Monday morning the RSS may
     # still show Sunday's (empty) date if the feed hasn't updated yet.
-    if not papers and not explicit_date:
+    # The same applies when the feed has a new date but still holds the papers we
+    # ingested on an earlier day.
+    if feed_not_ready(papers) and not explicit_date:
         today_weekday = datetime.now().weekday()  # 0=Mon
         is_weekday = today_weekday < 5  # Sat=5, Sun=6
         if is_weekday:
             while True:
-                # Delete the empty file so fetch_papers re-fetches
-                empty_file = os.path.join(CACHE_DIR, f"cs_cv_{target_date}.json")
-                if os.path.exists(empty_file):
-                    os.remove(empty_file)
-                if not wait_for_next_poll("0 papers on a weekday"):
+                reason = feed_not_ready(papers)
+                if not reason:
+                    break
+                if not wait_for_next_poll(reason):
                     break
                 # Re-check RSS date in case it updated during the wait
                 target_date = get_arxiv_announcement_date() or date.today().isoformat()
                 papers = fetch_papers(target_date, force=True)
                 log(f"Re-check: fetched {len(papers)} papers (date: {target_date})")
-                if papers:
-                    break
 
     if not papers:
         log_separator("Complete (no papers)")
+        return
+    if feed_not_ready(papers):
+        log_separator("Complete (feed not updated)")
         return
 
     # 2. Stage 1: title scan
@@ -522,7 +545,7 @@ def main():
     # Only mark this announcement done if filtering fully worked, so a later
     # run (even tomorrow's 04:00 on a stale feed) retries it
     if not explicit_date and not failed_batches:
-        save_last_run(target_date, ingest_date)
+        save_last_run(target_date, ingest_date, [p["arxiv_id"] for p in papers])
 
     # 5. Fetch thumbnails for papers with project pages
     log_separator("Stage 4: Thumbnails")

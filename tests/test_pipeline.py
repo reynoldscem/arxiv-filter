@@ -41,7 +41,7 @@ def test_last_run_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(cron_update, "STATE_FILE", str(tmp_path / "last_run.json"))
     assert cron_update.load_last_run() == {}
     cron_update.save_last_run("2026-10-07", "2026-10-07")
-    assert cron_update.load_last_run() == {"announcement_date": "2026-10-07", "ingest_date": "2026-10-07"}
+    assert cron_update.load_last_run() == {"announcement_date": "2026-10-07", "ingest_date": "2026-10-07", "paper_ids": []}
 
 
 def test_claude_error_envelope_raises(monkeypatch):
@@ -96,3 +96,25 @@ def test_lock_blocks_second_run(tmp_path, monkeypatch):
     second = cron_update.acquire_lock()
     assert second is not None
     second.close()
+
+
+@pytest.mark.parametrize("ids,today,last_run,expected", [
+    # Feed re-dated overnight but still holds yesterday's papers
+    (["a", "b"], "2026-11-10", {"ingest_date": "2026-11-09", "paper_ids": ["a", "b", "c"]}, True),
+    # At least one new paper: the feed has moved on
+    (["a", "d"], "2026-11-10", {"ingest_date": "2026-11-09", "paper_ids": ["a", "b", "c"]}, False),
+    # Same-day top-up run: always proceed
+    (["a", "b"], "2026-11-10", {"ingest_date": "2026-11-10", "paper_ids": ["a", "b"]}, False),
+    # Old state file without paper_ids
+    (["a"], "2026-11-10", {"ingest_date": "2026-11-09"}, False),
+    ([], "2026-11-10", {"ingest_date": "2026-11-09", "paper_ids": ["a"]}, False),
+])
+def test_repeats_last_run(ids, today, last_run, expected):
+    papers = [{"arxiv_id": i} for i in ids]
+    assert cron_update.repeats_last_run(papers, today, last_run) is expected
+
+
+def test_last_run_saves_paper_ids(tmp_path, monkeypatch):
+    monkeypatch.setattr(cron_update, "STATE_FILE", str(tmp_path / "last_run.json"))
+    cron_update.save_last_run("2026-11-10", "2026-11-10", ["b", "a"])
+    assert cron_update.load_last_run()["paper_ids"] == ["a", "b"]
